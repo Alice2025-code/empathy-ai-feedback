@@ -1,4 +1,31 @@
 // api/feedback.js
+function extractOutputText(result) {
+  // 1) If the SDK provided output_text, use it
+  if (typeof result?.output_text === "string" && result.output_text.trim()) {
+    return result.output_text.trim();
+  }
+
+  // 2) Otherwise, try to read from the Responses API "output" array
+  const output = result?.output;
+  if (Array.isArray(output)) {
+    const texts = [];
+    for (const item of output) {
+      const content = item?.content;
+      if (Array.isArray(content)) {
+        for (const c of content) {
+          // Common: { type: "output_text", text: "..." }
+          if (typeof c?.text === "string" && c.text.trim()) texts.push(c.text.trim());
+          // Sometimes: { type: "output_text", value: "..." }
+          if (typeof c?.value === "string" && c.value.trim()) texts.push(c.value.trim());
+        }
+      }
+    }
+    if (texts.length) return texts.join("\n");
+  }
+
+  return null;
+}
+
 export default async function handler(req, res) {
   // Basic CORS so your Storyline project can call this endpoint
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -135,11 +162,15 @@ Learner response: """${learnerResponse}"""
       (data.output_text && String(data.output_text).trim()) ||
       "";
 
-    if (!outputText) {
+    const text = extractOutputText(result);
+
+    if (!text) {
+      console.error("OpenAI raw result (no text found):", JSON.stringify(result, null, 2));
       return res.status(500).json({
-        error: "No output_text returned from OpenAI."
+        error: "No text returned from OpenAI (could not extract output).",
       });
-    }
+     }
+
 
     const parsed = JSON.parse(outputText);
     return res.status(200).json(parsed);

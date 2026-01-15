@@ -1,181 +1,106 @@
-// api/feedback.js
-function extractOutputText(result) {
-  // 1) If the SDK provided output_text, use it
-  if (typeof result?.output_text === "string" && result.output_text.trim()) {
-    return result.output_text.trim();
-  }
-
-  // 2) Otherwise, try to read from the Responses API "output" array
-  const output = result?.output;
-  if (Array.isArray(output)) {
-    const texts = [];
-    for (const item of output) {
-      const content = item?.content;
-      if (Array.isArray(content)) {
-        for (const c of content) {
-          // Common: { type: "output_text", text: "..." }
-          if (typeof c?.text === "string" && c.text.trim()) texts.push(c.text.trim());
-          // Sometimes: { type: "output_text", value: "..." }
-          if (typeof c?.value === "string" && c.value.trim()) texts.push(c.value.trim());
-        }
-      }
-    }
-    if (texts.length) return texts.join("\n");
-  }
-
-  return null;
-}
-
 export default async function handler(req, res) {
-  // Basic CORS so your Storyline project can call this endpoint
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-
-  if (req.method === "OPTIONS") return res.status(204).end();
+  // Allow POST only
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Use POST with JSON body." });
-    }
+  }
 
   try {
-    const {
-      scenarioId,
-      channel, // "phone" or "chat" (optional but helpful)
-      memberStatement,
-      learnerResponse
-    } = req.body || {};
+    const { scenarioId, channel, memberStatement, learnerResponse } = req.body || {};
 
-    if (!memberStatement || typeof memberStatement !== "string") {
-      return res.status(400).json({ error: "Missing memberStatement (string)." });
-    }
-    if (!learnerResponse || typeof learnerResponse !== "string") {
-      return res.status(400).json({ error: "Missing learnerResponse (string)." });
+    if (!memberStatement || !learnerResponse) {
+      return res.status(400).json({
+        error: "Missing required fields",
+        required: ["memberStatement", "learnerResponse"],
+      });
     }
 
-    const system = `
-You are an empathy coach for US health insurance customer service agents.
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "Missing OPENAI_API_KEY in environment variables." });
+    }
 
-Evaluate the learner response against THREE criteria:
-1) Empathy first: Does the learner acknowledge/name the member’s emotion BEFORE problem-solving?
-2) Emotion match: Did the learner acknowledge an emotion that reasonably matches the member’s likely emotion(s) in the statement?
-   - Allow close matches (e.g., "concerned" vs "worried").
-   - Do NOT require perfect wording. But if the learner labels the wrong emotion (e.g., "excited" when the member is anxious), mark as not matching.
-3) Offer to help: Does the learner move beyond empathy by offering help / next step (e.g., "Let me look into that," "I can help explain," "Let’s review options")?
+    const systemPrompt = `
+You are an empathy coach for a call-center style conversation.
+Evaluate the learner response on THREE criteria:
+1) Empathy first: do they acknowledge the member’s feelings before problem-solving?
+2) Correct emotion: do they name/reflect the right emotion intensity (e.g., frustrated vs furious; sad vs excited)?
+3) Offer to help: do they move from empathy into helpful action (without over-focusing on the technical fix)?
 
-Important rules:
-- Do NOT judge insurance technical accuracy. Only judge communication behaviors above.
-- Be friendly, concise, and coaching-focused.
-- If learner misses any criteria: give specific feedback on what’s missing and provide 1–2 good example responses.
-- If learner meets all three: give positive reinforcement and provide 1–2 alternative strong example responses.
-- Examples should be short and realistic. Start examples with empathy language first, then offer help/next step.
-- Return STRICT JSON only matching the schema.
-`.trim();
+Return ONLY valid JSON with this exact structure:
+{
+  "scenarioId": number|null,
+  "scores": { "empathyFirst": 0|1, "correctEmotion": 0|1, "offerHelp": 0|1 },
+  "overall": "pass"|"needs_work",
+  "feedback": "string",
+  "examples": ["string", "string"],
+  "detectedEmotion": "string",
+  "rewriteSuggestion": "string"
+}
+Keep tone friendly and encouraging. No markdown.
+`;
 
-    const user = `
-ScenarioId: ${scenarioId ?? ""}
-Channel: ${channel ?? ""}
-Member statement: """${memberStatement}"""
-Learner response: """${learnerResponse}"""
-`.trim();
+    const userPrompt = `
+ScenarioId: ${scenarioId ?? null}
+Channel: ${channel ?? "chat"}
+Member statement: ${memberStatement}
+Learner response: ${learnerResponse}
+`;
 
-    // Strict JSON schema so Storyline can reliably parse/display output
-    const schema = {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        empathy_first: { type: "boolean" },
-        emotion_match: { type: "boolean" },
-        offer_to_help: { type: "boolean" },
-
-        expected_emotions: {
-          type: "array",
-          items: { type: "string" },
-          minItems: 1,
-          maxItems: 3
-        },
-
-        learner_emotion_language: {
-          type: "string",
-          description: "What emotion words/phrases the learner used (or 'none')."
-        },
-
-        feedback: {
-          type: "string",
-          description: "Friendly, specific coaching. Keep to 2–4 sentences."
-        },
-
-        examples: {
-          type: "array",
-          items: { type: "string" },
-          minItems: 1,
-          maxItems: 2
-        }
-      },
-      required: [
-        "empathy_first",
-        "emotion_match",
-        "offer_to_help",
-        "expected_emotions",
-        "learner_emotion_language",
-        "feedback",
-        "examples"
-      ]
-    };
-
+    // Call OpenAI (Responses API)
     const openaiResp = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: "gpt-4.1-mini",
         input: [
-          { role: "system", content: system },
-          { role: "user", content: user }
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
         ],
-        temperature: 0.2,
-        max_output_tokens: 260,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "empathy_feedback_v1",
-            strict: true,
-            schema
-          }
-        }
-      })
+      }),
     });
-
-    if (!openaiResp.ok) {
-      const errText = await openaiResp.text();
-      return res.status(500).json({
-        error: "OpenAI request failed",
-        details: errText
-      });
-    }
 
     const data = await openaiResp.json();
 
-    // With structured outputs, `output_text` should be the JSON string.
+    if (!openaiResp.ok) {
+      return res.status(500).json({
+        error: "OpenAI request failed",
+        details: data,
+      });
+    }
+
+    // Extract text output safely
     const outputText =
-      (data.output_text && String(data.output_text).trim()) ||
+      data?.output?.[0]?.content?.find((c) => c.type === "output_text")?.text ||
+      data?.output_text ||
       "";
 
-    const text = extractOutputText(result);
-
-    if (!text) {
-      console.error("OpenAI raw result (no text found):", JSON.stringify(result, null, 2));
+    if (!outputText) {
       return res.status(500).json({
-        error: "No text returned from OpenAI (could not extract output).",
+        error: "No output_text returned from OpenAI.",
+        details: data,
       });
-     }
+    }
 
+    // Parse JSON from the model
+    let result;
+    try {
+      result = JSON.parse(outputText);
+    } catch (e) {
+      return res.status(500).json({
+        error: "Model did not return valid JSON.",
+        raw: outputText,
+      });
+    }
 
-    const parsed = JSON.parse(outputText);
-    return res.status(200).json(parsed);
-
-  } catch (e) {
-    return res.status(500).json({ error: "Server error", details: String(e) });
+    // result is guaranteed defined here
+    return res.status(200).json(result);
+  } catch (err) {
+    return res.status(500).json({
+      error: "Server error",
+      details: String(err),
+    });
   }
 }

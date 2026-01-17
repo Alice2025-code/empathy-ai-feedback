@@ -4,29 +4,54 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Use POST with JSON body." });
   }
 
+  // Helper: build a complete example (prefer rewriteSuggestion; fallback to examples)
+  function buildCompleteExample(result) {
+    const rewrite = (result?.rewriteSuggestion || "").trim();
+
+    // If rewrite looks like an actual example response (not generic praise), use it
+    const looksLikeGenericPraise =
+      /^your response/i.test(rewrite) ||
+      /keep up/i.test(rewrite) ||
+      /great job/i.test(rewrite) ||
+      rewrite.length < 20;
+
+    if (rewrite && !looksLikeGenericPraise) return rewrite;
+
+    const examples = Array.isArray(result?.examples)
+      ? result.examples.filter((x) => typeof x === "string" && x.trim().length > 0)
+      : [];
+
+    if (examples.length >= 2) {
+      // Join into one complete response
+      const first = examples[0].trim().replace(/[.?!]$/, "") + ".";
+      const second = examples[1].trim();
+      return `${first} ${second}`.replace(/\s+/g, " ").trim();
+    }
+
+    if (examples.length === 1) return examples[0].trim();
+
+    return "";
+  }
+
   // Helper: build one learner-friendly coaching paragraph (Option A)
   function buildCoachingMessage(result) {
     const feedback = (result?.feedback || "").trim();
 
-    // Keep it brief: 0–1 example
-    const examples = Array.isArray(result?.examples)
-      ? result.examples.filter((x) => typeof x === "string" && x.trim().length > 0)
-      : [];
-    const exampleLine = examples.length ? ` You could also say: “${examples[0].trim()}”` : "";
+    const scores = result?.scores || {};
+    const isPerfect =
+      scores.empathyFirst === 1 && scores.correctEmotion === 1 && scores.offerHelp === 1;
 
-    // Include rewriteSuggestion only if it looks like an actual rewrite (not generic praise)
-    const rewrite = (result?.rewriteSuggestion || "").trim();
-    const looksLikeRewrite =
-      rewrite &&
-      rewrite.length >= 20 &&
-      rewrite.length <= 260 &&
-      !/^your response/i.test(rewrite) &&
-      !/keep up/i.test(rewrite) &&
-      !/great job/i.test(rewrite);
+    const example = buildCompleteExample(result);
 
-    const rewriteLine = looksLikeRewrite ? ` Rewrite suggestion: “${rewrite}”` : "";
+    // Add the right “You could say…” line (no quotes, no labels)
+    let exampleLine = "";
+    if (example) {
+      exampleLine = isPerfect
+        ? ` You could also say: ${example}`
+        : ` You could say: ${example}`;
+    }
 
-    return `${feedback}${exampleLine}${rewriteLine}`.replace(/\s+/g, " ").trim();
+    return `${feedback}${exampleLine}`.replace(/\s+/g, " ").trim();
   }
 
   try {
@@ -61,15 +86,18 @@ Return ONLY valid JSON with this exact structure:
   "detectedEmotion": "string",
   "rewriteSuggestion": "string"
 }
+Guidelines:
+- examples should be complete, realistic agent responses when possible.
+- rewriteSuggestion should be a full improved response when the learner needs work.
 Keep tone friendly and encouraging. No markdown.
-`;
+`.trim();
 
     const userPrompt = `
 ScenarioId: ${scenarioId ?? null}
 Channel: ${channel ?? "chat"}
 Member statement: ${memberStatement}
 Learner response: ${learnerResponse}
-`;
+`.trim();
 
     // Call OpenAI (Responses API)
     const openaiResp = await fetch("https://api.openai.com/v1/responses", {

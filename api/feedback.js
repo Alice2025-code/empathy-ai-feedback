@@ -4,6 +4,31 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Use POST with JSON body." });
   }
 
+  // Helper: build one learner-friendly coaching paragraph (Option A)
+  function buildCoachingMessage(result) {
+    const feedback = (result?.feedback || "").trim();
+
+    // Keep it brief: 0–1 example
+    const examples = Array.isArray(result?.examples)
+      ? result.examples.filter((x) => typeof x === "string" && x.trim().length > 0)
+      : [];
+    const exampleLine = examples.length ? ` You could also say: “${examples[0].trim()}”` : "";
+
+    // Include rewriteSuggestion only if it looks like an actual rewrite (not generic praise)
+    const rewrite = (result?.rewriteSuggestion || "").trim();
+    const looksLikeRewrite =
+      rewrite &&
+      rewrite.length >= 20 &&
+      rewrite.length <= 260 &&
+      !/^your response/i.test(rewrite) &&
+      !/keep up/i.test(rewrite) &&
+      !/great job/i.test(rewrite);
+
+    const rewriteLine = looksLikeRewrite ? ` Rewrite suggestion: “${rewrite}”` : "";
+
+    return `${feedback}${exampleLine}${rewriteLine}`.replace(/\s+/g, " ").trim();
+  }
+
   try {
     const { scenarioId, channel, memberStatement, learnerResponse } = req.body || {};
 
@@ -95,7 +120,9 @@ Learner response: ${learnerResponse}
       });
     }
 
-    // result is guaranteed defined here
+    // Add learner-friendly single paragraph (Option A)
+    result.coachingMessage = buildCoachingMessage(result);
+
     return res.status(200).json(result);
   } catch (err) {
     return res.status(500).json({

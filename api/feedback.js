@@ -4,55 +4,67 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Use POST with JSON body." });
   }
 
-  // Helper: build a complete example (prefer rewriteSuggestion; fallback to examples)
-  function buildCompleteExample(result) {
-    const rewrite = (result?.rewriteSuggestion || "").trim();
+ // Helper: keep only the first ~2 sentences (one complete example)
+function firstTwoSentences(text) {
+  const t = (text || "").trim().replace(/\s+/g, " ");
+  if (!t) return "";
 
-    // If rewrite looks like an actual example response (not generic praise), use it
-    const looksLikeGenericPraise =
-      /^your response/i.test(rewrite) ||
-      /keep up/i.test(rewrite) ||
-      /great job/i.test(rewrite) ||
-      rewrite.length < 20;
+  // Split into sentences while keeping punctuation.
+  const parts = t.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [t];
 
-    if (rewrite && !looksLikeGenericPraise) return rewrite;
+  // Take up to 2 sentences and join.
+  return parts.slice(0, 2).join(" ").trim();
+}
 
-    const examples = Array.isArray(result?.examples)
-      ? result.examples.filter((x) => typeof x === "string" && x.trim().length > 0)
-      : [];
+// Helper: build a complete example (prefer rewriteSuggestion; fallback to examples)
+function buildCompleteExample(result) {
+  const rewriteRaw = (result?.rewriteSuggestion || "").trim();
 
-    if (examples.length >= 2) {
-      // Join into one complete response
-      const first = examples[0].trim().replace(/[.?!]$/, "") + ".";
-      const second = examples[1].trim();
-      return `${first} ${second}`.replace(/\s+/g, " ").trim();
-    }
+  const looksLikeGenericPraise =
+    /^your response/i.test(rewriteRaw) ||
+    /keep up/i.test(rewriteRaw) ||
+    /great job/i.test(rewriteRaw) ||
+    rewriteRaw.length < 20;
 
-    if (examples.length === 1) return examples[0].trim();
-
-    return "";
+  if (rewriteRaw && !looksLikeGenericPraise) {
+    // Ensure we only return ONE concise example
+    return firstTwoSentences(rewriteRaw);
   }
 
-  // Helper: build one learner-friendly coaching paragraph (Option A)
-  function buildCoachingMessage(result) {
-    const feedback = (result?.feedback || "").trim();
+  const examples = Array.isArray(result?.examples)
+    ? result.examples.filter((x) => typeof x === "string" && x.trim().length > 0)
+    : [];
 
-    const scores = result?.scores || {};
-    const isPerfect =
-      scores.empathyFirst === 1 && scores.correctEmotion === 1 && scores.offerHelp === 1;
-
-    const example = buildCompleteExample(result);
-
-    // Add the right “You could say…” line (no quotes, no labels)
-    let exampleLine = "";
-    if (example) {
-      exampleLine = isPerfect
-        ? ` You could also say: ${example}`
-        : ` You could say: ${example}`;
-    }
-
-    return `${feedback}${exampleLine}`.replace(/\s+/g, " ").trim();
+  if (examples.length >= 2) {
+    // Join into one complete response (then cap to 2 sentences)
+    const combined = `${examples[0].trim()} ${examples[1].trim()}`.replace(/\s+/g, " ").trim();
+    return firstTwoSentences(combined);
   }
+
+  if (examples.length === 1) return firstTwoSentences(examples[0].trim());
+
+  return "";
+}
+
+// Helper: build one learner-friendly coaching paragraph (Option A)
+function buildCoachingMessage(result) {
+  const feedback = (result?.feedback || "").trim();
+
+  const scores = result?.scores || {};
+  const isPerfect =
+    scores.empathyFirst === 1 && scores.correctEmotion === 1 && scores.offerHelp === 1;
+
+  const example = buildCompleteExample(result);
+
+  let exampleLine = "";
+  if (example) {
+    exampleLine = isPerfect
+      ? ` You could also say: ${example}`
+      : ` You could say: ${example}`;
+  }
+
+  return `${feedback}${exampleLine}`.replace(/\s+/g, " ").trim();
+}
 
   try {
     const { scenarioId, channel, memberStatement, learnerResponse } = req.body || {};

@@ -1,70 +1,20 @@
 export default async function handler(req, res) {
+  // ✅ CORS (for browser-based Storyline fetch)
+  // For a demo, "*" is fine. If you want to restrict later, replace "*" with:
+  // "https://empathy-storyline-test.vercel.app"
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+
+  // ✅ Preflight request (browser will send this before POST)
+  if (req.method === "OPTIONS") {
+    return res.status(200).end();
+  }
+
   // Allow POST only
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Use POST with JSON body." });
   }
-
- // Helper: keep only the first ~2 sentences (one complete example)
-function firstTwoSentences(text) {
-  const t = (text || "").trim().replace(/\s+/g, " ");
-  if (!t) return "";
-
-  // Split into sentences while keeping punctuation.
-  const parts = t.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [t];
-
-  // Take up to 2 sentences and join.
-  return parts.slice(0, 2).join(" ").trim();
-}
-
-// Helper: build a complete example (prefer rewriteSuggestion; fallback to examples)
-function buildCompleteExample(result) {
-  const rewriteRaw = (result?.rewriteSuggestion || "").trim();
-
-  const looksLikeGenericPraise =
-    /^your response/i.test(rewriteRaw) ||
-    /keep up/i.test(rewriteRaw) ||
-    /great job/i.test(rewriteRaw) ||
-    rewriteRaw.length < 20;
-
-  if (rewriteRaw && !looksLikeGenericPraise) {
-    // Ensure we only return ONE concise example
-    return firstTwoSentences(rewriteRaw);
-  }
-
-  const examples = Array.isArray(result?.examples)
-    ? result.examples.filter((x) => typeof x === "string" && x.trim().length > 0)
-    : [];
-
-  if (examples.length >= 2) {
-    // Join into one complete response (then cap to 2 sentences)
-    const combined = `${examples[0].trim()} ${examples[1].trim()}`.replace(/\s+/g, " ").trim();
-    return firstTwoSentences(combined);
-  }
-
-  if (examples.length === 1) return firstTwoSentences(examples[0].trim());
-
-  return "";
-}
-
-// Helper: build one learner-friendly coaching paragraph (Option A)
-function buildCoachingMessage(result) {
-  const feedback = (result?.feedback || "").trim();
-
-  const scores = result?.scores || {};
-  const isPerfect =
-    scores.empathyFirst === 1 && scores.correctEmotion === 1 && scores.offerHelp === 1;
-
-  const example = buildCompleteExample(result);
-
-  let exampleLine = "";
-  if (example) {
-    exampleLine = isPerfect
-      ? ` You could also say: ${example}`
-      : ` You could say: ${example}`;
-  }
-
-  return `${feedback}${exampleLine}`.replace(/\s+/g, " ").trim();
-}
 
   try {
     const { scenarioId, channel, memberStatement, learnerResponse } = req.body || {};
@@ -93,23 +43,26 @@ Return ONLY valid JSON with this exact structure:
   "scenarioId": number|null,
   "scores": { "empathyFirst": 0|1, "correctEmotion": 0|1, "offerHelp": 0|1 },
   "overall": "pass"|"needs_work",
-  "feedback": "string",
-  "examples": ["string", "string"],
   "detectedEmotion": "string",
-  "rewriteSuggestion": "string"
+  "coachingMessage": "string"
 }
-Guidelines:
-- examples should be complete, realistic agent responses when possible.
-- rewriteSuggestion should be a full improved response when the learner needs work.
-Keep tone friendly and encouraging. No markdown.
-`.trim();
+
+Rules for coachingMessage:
+- ONE short coaching paragraph (friendly, coach-like).
+- If overall is pass: include ONE sentence that starts with "You could also say: " followed by ONE complete example.
+- If overall is needs_work: include ONE sentence that starts with "You could say: " followed by ONE complete example.
+- Do NOT include labels like "rewriteSuggestion:" in the coachingMessage.
+- No markdown.
+
+No extra keys. No code fences.
+`;
 
     const userPrompt = `
 ScenarioId: ${scenarioId ?? null}
 Channel: ${channel ?? "chat"}
 Member statement: ${memberStatement}
 Learner response: ${learnerResponse}
-`.trim();
+`;
 
     // Call OpenAI (Responses API)
     const openaiResp = await fetch("https://api.openai.com/v1/responses", {
@@ -121,8 +74,8 @@ Learner response: ${learnerResponse}
       body: JSON.stringify({
         model: "gpt-4.1-mini",
         input: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
+          { role: "system", content: systemPrompt.trim() },
+          { role: "user", content: userPrompt.trim() },
         ],
       }),
     });
@@ -149,7 +102,6 @@ Learner response: ${learnerResponse}
       });
     }
 
-    // Parse JSON from the model
     let result;
     try {
       result = JSON.parse(outputText);
@@ -159,9 +111,6 @@ Learner response: ${learnerResponse}
         raw: outputText,
       });
     }
-
-    // Add learner-friendly single paragraph (Option A)
-    result.coachingMessage = buildCoachingMessage(result);
 
     return res.status(200).json(result);
   } catch (err) {

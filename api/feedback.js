@@ -2,7 +2,7 @@ export default async function handler(req, res) {
   // ✅ CORS (for browser-based Storyline fetch)
   // For a demo, "*" is fine. If you want to restrict later, replace "*" with:
   // "https://empathy-storyline-test.vercel.app"
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Origin", "https://empathy-storyline-test.vercel.app");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 

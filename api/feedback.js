@@ -83,11 +83,17 @@ Learner response: ${learnerResponse}
     const data = await openaiResp.json();
 
     if (!openaiResp.ok) {
-      return res.status(500).json({
-        error: "OpenAI request failed",
-        details: data,
-      });
-    }
+  const msg =
+    data?.error?.message ||
+    data?.message ||
+    JSON.stringify(data)?.slice(0, 300) ||
+    "Unknown OpenAI error";
+
+  return res.status(openaiResp.status).json({
+    error: `OpenAI request failed (${openaiResp.status}): ${msg}`,
+    details: data,
+  });
+}
 
     // Extract text output safely
     const outputText =

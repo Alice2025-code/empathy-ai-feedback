@@ -72,7 +72,7 @@ Learner response: ${learnerResponse}
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4.1-mini",
+        model: "gpt-6-luna",
         input: [
           { role: "system", content: systemPrompt.trim() },
           { role: "user", content: userPrompt.trim() },

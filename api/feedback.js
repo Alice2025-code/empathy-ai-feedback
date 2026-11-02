@@ -73,6 +73,7 @@ Learner response: ${learnerResponse}
       },
       body: JSON.stringify({
         model: "gpt-6-luna",
+        reasoning: { effort: "none" },
         input: [
           { role: "system", content: systemPrompt.trim() },
           { role: "user", content: userPrompt.trim() },

@@ -97,8 +97,12 @@ Learner response: ${learnerResponse}
 
     // Extract text output safely
     const outputText =
-      data?.output?.[0]?.content?.find((c) => c.type === "output_text")?.text ||
       data?.output_text ||
+      data?.output
+        ?.flatMap((item) => item.content || [])
+        ?.filter((content) => content.type === "output_text")
+        ?.map((content) => content.text)
+        ?.join("") ||
       "";
 
     if (!outputText) {
